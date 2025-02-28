@@ -2,6 +2,8 @@ from flask import Flask, request
 from google.cloud import datastore
 from jsonschema import validate
 import json
+import logging
+from jsonschema.exceptions import ValidationError
 
 
 BUSINESSES= 'businesses'
@@ -23,42 +25,45 @@ def index():
 #              BUSINESS FUNCTIONALITY  
 ##################################################
 
-# validate business jsons
+# Validate business jsons
 def validate_business(content):
     body_schema = {
         "type": "object",
         "properties": {
-            "owner_id": {"type" : "number"},
-            "name": {"type" : "string"}, 
-            "street_address": {"type" : "string"}, 
-            "city": {"type" : "string"},
-            "state": {"type" : "string"},
-            "zip_code": {"type" : "number"}
+            "owner_id": {"type": "number"},
+            "name": {"type": "string"},
+            "street_address": {"type": "string"},
+            "city": {"type": "string"},
+            "state": {"type": "string"},
+            "zip_code": {"type": "number"}
         },
-        "required": [
-            "owner_id",
-            "name", 
-            "street_address",
-            "city",
-            "state",
-            "zip_code"
-        ],
-        "additionalProperties": False               # only allow above
+        "required": ["owner_id", "name", "street_address", "city", "state", "zip_code"],
+        "additionalProperties": False
     }
 
     try:
         validate(instance=content, schema=body_schema)
-    except:
+        return True
+    except ValidationError as e:
+        logging.error(f"Validation Error: {e.message}")
         return False
-
-    return True
 
 # create a business
 @app.route('/' + BUSINESSES, methods=['POST'])
 def post_business():
-    content = request.get_json()
+    try:
+        content = request.get_json()
+        if not content:
+            return {"Error": "Missing JSON body"}, 400
+    except Exception as e:
+        return {"Error": f"Invalid JSON: {str(e)}"}, 400
+
+    if request.content_type != 'application/json':
+        return {"Error": "Content-Type must be application/json"}, 400
+
     if not validate_business(content):
         return (ERROR_WRONG_CONTENT, 400)
+
     new_business = datastore.Entity(client.key(BUSINESSES))
     new_business.update({
         "owner_id": content["owner_id"],
@@ -107,7 +112,16 @@ def get_business_by_id(business_id):
 # edit business
 @app.route('/' + BUSINESSES + '/<int:business_id>', methods=['PUT'])
 def put_business(business_id):
-    content = request.get_json()
+    try:
+        content = request.get_json()
+        if not content:
+            return {"Error": "Missing JSON body"}, 400
+    except Exception as e:
+        return {"Error": f"Invalid JSON: {str(e)}"}, 400
+
+    if request.content_type != 'application/json':
+        return {"Error": "Content-Type must be application/json"}, 400
+
     if not validate_business(content):
         return (ERROR_WRONG_CONTENT, 400)
     
@@ -133,28 +147,23 @@ def put_business(business_id):
 # delete business
 @app.route('/' + BUSINESSES + '/<int:business_id>', methods=['DELETE'])
 def delete_business(business_id):
-    # get key
     business_key = client.key(BUSINESSES, business_id)
     business = client.get(key=business_key)
-    
+
     if business is None:
-        return ERROR_NOT_FOUND,404
-    else:
-        # find any reviews and delete them
-        query = client.query(kind=REVIEWS)
-        query.add_filter('business_id', '=', business_id)
-        
-        results = list(query.fetch())
-        for item in results:
-            review_id = item.key.id
-            # get key
-            review_key = client.key(REVIEWS, review_id)
-            client.delete(review_key)
-            return ('', 204)
-        
-        # then delete the business
-        client.delete(business_key)
-        return ('', 204)
+        return ERROR_NOT_FOUND, 404
+    
+    # delete all associated reviews 
+    query = client.query(kind=REVIEWS)
+    query.add_filter('business_id', '=', business_id)
+    reviews = list(query.fetch())
+
+    for review in reviews:
+        client.delete(client.key(REVIEWS, review.key.id))
+    
+    # delete the business itself
+    client.delete(business_key)
+    return '', 204
 
 
 ###################################################
@@ -233,7 +242,15 @@ def business_id_exists(business_id):
 # create a review
 @app.route('/' + REVIEWS, methods=['POST'])
 def post_review():
-    content = request.get_json()
+    try:
+        content = request.get_json()
+        if not content:
+            return {"Error": "Missing JSON body"}, 400
+    except Exception as e:
+        return {"Error": f"Invalid JSON: {str(e)}"}, 400
+
+    if request.content_type != 'application/json':
+        return {"Error": "Content-Type must be application/json"}, 400
 
     if not validate_review(content):
         return (ERROR_WRONG_CONTENT, 400)
@@ -286,7 +303,13 @@ def get_review_by_user(user_id):
 # edit review
 @app.route('/' + REVIEWS + '/<int:review_id>', methods=['PUT'])
 def put_review(review_id):
-    content = request.get_json()
+    try:
+        content = request.get_json()
+        if not content:
+            return {"Error": "Missing JSON body"}, 400
+    except Exception as e:
+        return {"Error": f"Invalid JSON: {str(e)}"}, 400
+
     if not validate_update(content):
         return (ERROR_WRONG_CONTENT, 400)
     
